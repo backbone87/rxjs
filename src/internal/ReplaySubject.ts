@@ -1,6 +1,6 @@
 import { Subject } from './Subject';
 import { TimestampProvider } from './types';
-import { Subscriber } from './Subscriber';
+import { SafeSubscriber, Subscriber } from './Subscriber';
 import { Subscription } from './Subscription';
 import { dateTimestampProvider } from './scheduler/dateTimestampProvider';
 
@@ -70,15 +70,36 @@ export class ReplaySubject<T> extends Subject<T> {
     this._throwIfClosed();
     this._trimBuffer();
 
-    const subscription = this._innerSubscribe(subscriber);
-
     const { _infiniteTimeWindow, _buffer } = this;
-    // We use a copy here, so reentrant code does not mutate our array while we're
-    // emitting it to a new subscriber.
-    const copy = _buffer.slice();
-    for (let i = 0; i < copy.length && !subscriber.closed; i += _infiniteTimeWindow ? 1 : 2) {
-      subscriber.next(copy[i] as T);
+
+    // Replay the current values, but also the ones that are re-entered synchronously while emitting them.
+    const syncBuffer = _buffer.slice();
+    let isInitializing = true;
+
+    // This subscriber prevents new values from being emitted before the current values are all flushed.
+    const syncSubscriber = new SafeSubscriber<T>({
+      next(value) {
+        if (isInitializing) {
+          syncBuffer.push(value);
+        } else {
+          subscriber.next(value);
+        }
+      },
+      error(e) {
+        subscriber.error(e);
+      },
+      complete() {
+        subscriber.complete();
+      },
+    });
+    subscriber.add(syncSubscriber);
+
+    const subscription = this._innerSubscribe(syncSubscriber);
+
+    for (let i = 0; i < syncBuffer.length && !subscriber.closed; i += _infiniteTimeWindow ? 1 : 2) {
+      subscriber.next(syncBuffer[i] as T);
     }
+    isInitializing = false;
 
     this._checkFinalizedStatuses(subscriber);
 
