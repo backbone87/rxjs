@@ -79,11 +79,9 @@ export class ReplaySubject<T> extends Subject<T> {
       next(value) {
         syncValues.push(value);
       },
-      error(e) {
-        subscriber.error(e);
-      },
-      complete() {
-        subscriber.complete();
+      error() {
+        // syncSubscriber needs error() to be defined, otherwise errors will be raised as uncaught.
+        // In that case, `super` keeps the error that happened, and will emit it on _checkFinalizedStatuses.
       },
     });
     subscriber.add(syncSubscriber);

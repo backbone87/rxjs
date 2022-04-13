@@ -403,4 +403,26 @@ describe('ReplaySubject', () => {
     // results is [7] ?? wat?
     expect(results).to.deep.equal([1, 2, 3, 4]);
   });
+
+  it('should replay reentrant errors after emitting all values', () => {
+    const subject = new ReplaySubject<number>();
+    subject.next(1);
+    subject.next(2);
+
+    const results: string[] = [];
+
+    subject.subscribe(
+      (value) => {
+        results.push(value.toString());
+        if (value === 1) {
+          subject.error(new Error('error'));
+        }
+      },
+      (error) => {
+        results.push(error.message);
+      }
+    );
+
+    expect(results).to.deep.equal(['1', '2', 'error']);
+  });
 });
