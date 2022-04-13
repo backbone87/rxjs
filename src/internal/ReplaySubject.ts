@@ -70,20 +70,14 @@ export class ReplaySubject<T> extends Subject<T> {
     this._throwIfClosed();
     this._trimBuffer();
 
-    const { _infiniteTimeWindow, _buffer } = this;
-
-    // Replay the current values, but also the ones that are re-entered synchronously while emitting them.
-    const syncBuffer = _buffer.slice();
-    let isInitializing = true;
+    // Keep the new emissions that happen while replaying the values into a buffer
+    // so we can emit them in the same order they happened.
+    const syncValues: T[] = [];
 
     // This subscriber prevents new values from being emitted before the current values are all flushed.
     const syncSubscriber = new SafeSubscriber<T>({
       next(value) {
-        if (isInitializing) {
-          syncBuffer.push(value);
-        } else {
-          subscriber.next(value);
-        }
+        syncValues.push(value);
       },
       error(e) {
         subscriber.error(e);
@@ -94,12 +88,24 @@ export class ReplaySubject<T> extends Subject<T> {
     });
     subscriber.add(syncSubscriber);
 
-    const subscription = this._innerSubscribe(syncSubscriber);
+    const syncSubscription = this._innerSubscribe(syncSubscriber);
 
-    for (let i = 0; i < syncBuffer.length && !subscriber.closed; i += _infiniteTimeWindow ? 1 : 2) {
-      subscriber.next(syncBuffer[i] as T);
+    const { _infiniteTimeWindow, _buffer } = this;
+    // We use a copy here, so reentrant code does not mutate our array while we're
+    // emitting it to a new subscriber.
+    const copy = _buffer.slice();
+    for (let i = 0; i < copy.length && !subscriber.closed; i += _infiniteTimeWindow ? 1 : 2) {
+      subscriber.next(copy[i] as T);
     }
-    isInitializing = false;
+
+    // Emit values that are synchronously pushed
+    for (let i = 0; i < syncValues.length && !subscriber.closed; i++) {
+      subscriber.next(syncValues[i]);
+    }
+
+    // Swap subscription to the original one
+    syncSubscription.unsubscribe();
+    const subscription = this._innerSubscribe(subscriber);
 
     this._checkFinalizedStatuses(subscriber);
 
