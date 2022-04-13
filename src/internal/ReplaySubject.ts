@@ -1,6 +1,6 @@
 import { Subject } from './Subject';
 import { TimestampProvider } from './types';
-import { Subscriber } from './Subscriber';
+import { SafeSubscriber, Subscriber } from './Subscriber';
 import { Subscription } from './Subscription';
 import { dateTimestampProvider } from './scheduler/dateTimestampProvider';
 
@@ -70,7 +70,23 @@ export class ReplaySubject<T> extends Subject<T> {
     this._throwIfClosed();
     this._trimBuffer();
 
-    const subscription = this._innerSubscribe(subscriber);
+    // Keep the new emissions that happen while replaying the values into a buffer
+    // so we can emit them in the same order they happened.
+    const syncValues: T[] = [];
+
+    // This subscriber prevents new values from being emitted before the current values are all flushed.
+    const syncSubscriber = new SafeSubscriber<T>({
+      next(value) {
+        syncValues.push(value);
+      },
+      error() {
+        // syncSubscriber needs error() to be defined, otherwise errors will be raised as uncaught.
+        // In that case, `super` keeps the error that happened, and will emit it on _checkFinalizedStatuses.
+      },
+    });
+    subscriber.add(syncSubscriber);
+
+    const syncSubscription = this._innerSubscribe(syncSubscriber);
 
     const { _infiniteTimeWindow, _buffer } = this;
     // We use a copy here, so reentrant code does not mutate our array while we're
@@ -79,6 +95,15 @@ export class ReplaySubject<T> extends Subject<T> {
     for (let i = 0; i < copy.length && !subscriber.closed; i += _infiniteTimeWindow ? 1 : 2) {
       subscriber.next(copy[i] as T);
     }
+
+    // Emit values that are synchronously pushed
+    for (let i = 0; i < syncValues.length && !subscriber.closed; i++) {
+      subscriber.next(syncValues[i]);
+    }
+
+    // Swap subscription to the original one
+    syncSubscription.unsubscribe();
+    const subscription = this._innerSubscribe(subscriber);
 
     this._checkFinalizedStatuses(subscriber);
 
